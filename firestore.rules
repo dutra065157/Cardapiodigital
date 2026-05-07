@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && 
+             request.auth.token.email == "santosdutrarenato752@gmail.com" && 
+             request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Menu Rules ---
+    match /menu/{dayId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidMenuDay(incoming());
+    }
+
+    function isValidMenuDay(data) {
+      return data.keys().hasAll(['dishes', 'guarnicoes']) &&
+             data.keys().size() == 2 &&
+             data.dishes is list &&
+             data.guarnicoes is list &&
+             data.dishes.size() <= 20 &&
+             data.guarnicoes.size() <= 20;
+    }
+
+    // --- Order Rules ---
+    match /orders/{orderId} {
+      // Create is public but strict
+      allow create: if isValidOrder(incoming());
+      
+      // Admin only for management
+      allow read, get, list: if isAdmin();
+      allow update: if isAdmin() && (
+        // Action: Change Status
+        (incoming().diff(existing()).affectedKeys().hasOnly(['status'])) ||
+        // Action: Full Update
+        (isValidOrder(incoming()))
+      );
+      allow delete: if isAdmin();
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['customerName', 'address', 'total', 'status', 'createdAt', 'items']) &&
+             data.keys().size() == 6 &&
+             data.customerName is string && data.customerName.size() <= 100 &&
+             data.address is string && data.address.size() <= 500 &&
+             data.total is number && data.total >= 0 &&
+             data.status in ['Pendente', 'Em preparo', 'Entregue', 'Cancelado'] &&
+             // On create, status MUST be Pendente
+             (request.method == 'create' ? data.status == 'Pendente' : true) &&
+             // On create, createdAt MUST be request.time (or a number close to it if using Date.now())
+             // Since app uses Date.now(), we can't strictly use request.time in rules unless we change app logic.
+             // For now, let's allow number.
+             data.createdAt is number &&
+             data.items is list && data.items.size() > 0 && data.items.size() <= 100;
+    }
+  }
+}
